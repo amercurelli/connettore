@@ -1,0 +1,14 @@
+opencti:
+  url: 'http://localhost:8080'
+  token: 'ChangeMe'
+
+connector:
+  id: 'Mercurelli Tesi'
+  type: 'EXTERNAL_IMPORT'
+  name: 'Importa(?) dati'
+  scope: 'abuse-ssl'
+  log_level: '0.2'
+
+Importa(?) dati:
+  interval: 360 # Required, in minutes
+  max_retries: 3
