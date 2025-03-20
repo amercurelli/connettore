@@ -4,6 +4,8 @@ import json
 import os
 import sys
 import time
+import datetime
+
 
 import yaml
 from pycti import OpenCTIConnectorHelper, get_config_variable
@@ -18,13 +20,16 @@ class ExportFile:
             else {}
         )
         self.helper = OpenCTIConnectorHelper(config)
-        self.export_file_csv_delimiter = get_config_variable(
+
+        self.export_file_csv_delimiter = get_config_variable(   #in caso volessi utilizzare csv serve delimiter
             "EXPORT_FILE_CSV_DELIMITER",
             ["export-file-csv", "delimiter"],
             config,
             False,
             ";",
         )
+
+
 #Export in csv, aggiungo export in altri formati, per modificare modifico nel codice il formato di export
     def export_dict_list_to_csv(self, data):
         output = io.StringIO()
@@ -96,7 +101,12 @@ class ExportFile:
         return output.getvalue()
 
     def export_dict_list_to_json(self, data):
-        return json.dumps(data, indent=4)
+        def default_serializer(obj):
+            if isinstance(obj, datetime.datetime):
+                return obj.isoformat()
+            raise TypeError(f"Type {type(obj)} not serializable")
+
+        return json.dumps(data, indent=4, default=default_serializer)
 
     def export_dict_list_to_xml(self, data):
         """Esporta i dati in formato XML."""
@@ -255,7 +265,7 @@ class ExportFile:
             entities_list = self.helper.api_impersonate.opencti_stix_object_or_stix_relationship.list(
                 filters=main_filter, getAll=True
             )
-            self._export_list_csv(data, entities_list, list_filters)
+            self._export_list(data, entities_list, list_filters)
 
         if export_scope == "query":
             list_params = data["list_params"]
@@ -289,7 +299,7 @@ class ExportFile:
                 getAll=True,
             )
             list_filters = json.dumps(list_params)
-            self._export_list_json_(data, entities_list, list_filters)
+            self._export_list(data, entities_list, list_filters)
 
         return "Export done"
 
