@@ -303,6 +303,7 @@ class ExportFile:
 
         return "Export done"
 
+
     # Start the main loop
     def start(self):
         self.helper.listen(self._process_message)
@@ -310,11 +311,14 @@ class ExportFile:
     def traccia_tempo(self, entity_type, export_type, file_name):
 
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        current_user = self.helper.api.user_info()
+
         log_message = (
             f"Data transfer occurred at {timestamp}: "
             f"Entity Type: {entity_type}, "
             f"Export Type: {export_type}, "
             f"File Name: {file_name}"
+            f"Requested y User:{current_user}"
         )
         self.helper.connector_logger.info(log_message)
 
