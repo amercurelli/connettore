@@ -1,19 +1,14 @@
 opencti:
-  url: 'http://localhost:8080'
-  token: 'ChangeMe'
+  url: 'http://opencti:8080'
+  token: '${OPENCTI_ADMIN_TOKEN}' # Questo token deve essere quello di un utente Admin
 
 connector:
-  id: 'Mercurelli Tesi'
-  type: 'EXTERNAL_IMPORT'
-  name: 'Importa dati'
-  scope: 'abuse-ssl'
+  id: 'd417183f-4d92-429b-8f71-e61da6b908c6'
+  type: 'INTERNAL_EXPORT_FILE'
+  name: 'ExportFileCustom'
+  scope: 'export-file'
   log_level: 'info'
-
-Importa dati:
-  interval: 360
-  max_retries: 3
-  default_format: 'json'
-  delimiter: ';'
+  confidence_level: 100
 
 
 
