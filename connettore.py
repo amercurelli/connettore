@@ -5,6 +5,10 @@ import os
 import sys
 import time
 import datetime
+import psycopg2
+from psycopg2 import sql
+import magic
+
 
 
 import yaml
@@ -127,6 +131,11 @@ class ExportFile:
         entity_type = data["entity_type"]
 
         exported_data = self.export_dict_list_to_json(entities_list)  #decido in questa riga il formato da utilizzare
+        file_path="/app/tmp/exported_file.json"
+        with open(file_path, "w") as f:
+            f.write(exported_data)
+
+        salva_su_postgres(self.helper, file_path) #chiamo la funzione per salvare sul database, la funzione viene chiamata con path scelto in precedenza
 
         self.helper.log_info(f"Uploading {entity_type}/{export_type} to {file_name}")
         if entity_type == "Stix-Cyber-Observable":
@@ -168,7 +177,9 @@ class ExportFile:
             },
         )
 
-    def _process_message(self, data):
+    def _process_message(self, data): #la funzione presenta un process sia per valori singoli, sia per liste, questo per la natura della nostra
+        #piattaforma che consente di fare l'export di un singolo file json
+
         file_name = data["file_name"]
         export_scope = data["export_scope"]
         export_type = data["export_type"]
@@ -231,6 +242,15 @@ class ExportFile:
 
             entities_list.append(entity_data)
             json_data = self.export_dict_list_to_json(entities_list)
+
+
+            file_path = "/app/tmp/exported_single.json"
+            with open(file_path, "w") as f:
+                f.write(json_data)
+
+            salva_su_postgres(self.helper, file_path)
+
+
             self.helper.connector_logger.info(
                 "Uploading",
                 {
@@ -303,7 +323,6 @@ class ExportFile:
 
         return "Export done"
 
-
     # Start the main loop
     def start(self):
         self.helper.listen(self._process_message)
@@ -311,16 +330,119 @@ class ExportFile:
     def traccia_tempo(self, entity_type, export_type, file_name):
 
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        current_user = self.helper.api.user_info()
+        #current_user = self.helper.api.user_info() #current user non presente in export del database, implementabile aggiungendo uno skip eventuale se non trovato
 
         log_message = (
             f"Data transfer occurred at {timestamp}: "
             f"Entity Type: {entity_type}, "
             f"Export Type: {export_type}, "
             f"File Name: {file_name}"
-            f"Requested y User:{current_user}"
+            #f"Requested y User:{current_user}"
         )
         self.helper.connector_logger.info(log_message)
+
+
+def salva_su_postgres(helper, json_path):
+    helper.connector_logger.info("Funzione salva_su_postgres avviata.")
+    try:
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+        helper.connector_logger.info("File JSON letto con successo.")
+
+        if isinstance(data, dict) and "objects" in data:
+            objects = data["objects"]
+        elif isinstance(data, list):
+            objects = data
+        else:
+            helper.connector_logger.error(f"⚠Formato JSON non riconosciuto o vuoto: {type(data)}")
+            return
+
+        helper.connector_logger.info(f"Numero oggetti da salvare: {len(objects)}")
+
+        with psycopg2.connect(
+                dbname="mydatabase",
+                user="myuser",
+                password="mypassword",
+                host="postgres_db",
+                port=5432
+        ) as conn:
+            with conn.cursor() as cur:
+                indicator_map = {}
+
+                # Trova e inserisci il producer
+                helper.connector_logger.info("Inizio estrazione e inserimento del 'producer'.")
+                for obj in objects:
+                    if obj.get("entity_type") == "Indicator":
+                        created_by = obj.get("createdBy")
+                        if created_by and created_by.get("entity_type") == "Organization":
+                            nome = created_by.get("name")
+                            descrizione = created_by.get("description", "")
+                            try:
+                                cur.execute("""
+                                    INSERT INTO producer (nome, descrizione)
+                                    VALUES (%s, %s)
+                                    ON CONFLICT (nome) DO NOTHING;
+                                """, (nome, descrizione))
+                                helper.connector_logger.info(f"Inserimento 'producer' riuscito: {nome}")
+                            except Exception as e:
+                                helper.connector_logger.error(f"Errore inserimento producer: {e}", {"exception": e})
+
+                # Commit del producer, in modo da utilizzarlo in futuro per inserire produced nel database
+                conn.commit()
+
+
+                # Inserisci gli indicator e le relazioni
+                helper.connector_logger.info("Inizio inserimento degli 'indicator' e delle relazioni.")
+                for obj in objects:
+                    entity_type = obj.get("entity_type")
+                    if entity_type == "Indicator":
+                        stix_id = obj.get("id")
+                        name = obj.get("name", "")
+                        pattern = obj.get("pattern", "")
+                        description = obj.get("description", "")
+                        valid_from = obj.get("valid_from", None)
+                        valid_until = obj.get("valid_until", None)
+
+                        try:
+
+                            cur.execute("""
+                                INSERT INTO indicator (stix_id, name, pattern, description, valid_from, valid_until)
+                                VALUES (%s, %s, %s, %s, %s, %s)
+                                RETURNING id;
+                            """, (stix_id, name, pattern, description, valid_from, valid_until))
+                            new_id = cur.fetchone()[0]
+                            indicator_map[stix_id] = new_id
+                            helper.connector_logger.info(
+                                f"Inserimento 'indicator' riuscito: {name} (ID DB: {new_id})")
+                        except Exception as e:
+                            helper.connector_logger.error(f"Errore inserimento indicator: {e}", {"exception": e})
+                        #compilo relazione produced, con id indicator a producer name
+                        indicator_db_id = indicator_map.get(stix_id)
+                        created_by = obj.get("createdBy")
+                        if indicator_db_id and created_by:
+                            producer_name = created_by.get("name")
+                            if producer_name:
+                                try:
+                                    cur.execute("""
+                                        INSERT INTO produced (indicator_id, producer_nome)
+                                        VALUES (%s, %s)
+                                        ON CONFLICT DO NOTHING;
+                                    """, (indicator_db_id, producer_name))
+                                    helper.connector_logger.info(
+                                        f"Inserimento relazione riuscito: {indicator_db_id} -> {producer_name}")
+                                except Exception as e:
+                                    helper.connector_logger.error(f"Errore inserimento relazione: {e}",
+                                                                  {"exception": e})
+
+                conn.commit()
+                helper.connector_logger.info("Database compilato")
+
+    except Exception as e:
+        helper.connector_logger.error(f"Errore nella funzione salva_su_postgres: {e}", {"exception": e})
+
+    helper.connector_logger.info("Dati salvati nel database.")
+
+
 
 if __name__ == "__main__":
     try:
